@@ -181,26 +181,26 @@ export interface ThreadsPagedResponse<T> {
 // Media Specifications
 export interface MediaSpecs {
   image: {
-    formats: ['JPEG', 'PNG'];
-    maxFileSize: 8 * 1024 * 1024; // 8MB
-    maxWidth: 1440;
-    minWidth: 320;
-    aspectRatioLimit: 10; // 10:1
-    colorSpace: 'sRGB';
+    formats: string[];
+    maxFileSize: number; // 8MB
+    maxWidth: number;
+    minWidth: number;
+    aspectRatioLimit: number; // 10:1
+    colorSpace: string;
   };
   video: {
-    container: ['MOV', 'MP4'];
-    audioCodec: 'AAC';
-    videoCodec: ['HEVC', 'H264'];
-    maxFrameRate: 60;
-    minFrameRate: 23;
-    maxWidth: 1920;
-    aspectRatioMin: 0.01;
-    aspectRatioMax: 10;
-    maxBitrate: 100 * 1024 * 1024; // 100 Mbps
-    audioBitrate: 128; // kbps
-    maxDuration: 300; // 5 minutes
-    maxFileSize: 1024 * 1024 * 1024; // 1GB
+    container: string[];
+    audioCodec: string;
+    videoCodec: string[];
+    maxFrameRate: number;
+    minFrameRate: number;
+    maxWidth: number;
+    aspectRatioMin: number;
+    aspectRatioMax: number;
+    maxBitrate: number; // 100 Mbps
+    audioBitrate: number; // kbps
+    maxDuration: number; // 5 minutes
+    maxFileSize: number; // 1GB
   };
 }
 
