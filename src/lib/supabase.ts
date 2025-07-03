@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 import { createBrowserClient, createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 import type { NextRequest, NextResponse } from 'next/server';
@@ -9,7 +9,7 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
 // Client-side Supabase client
-export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
+export const supabase = createSupabaseClient<Database>(supabaseUrl, supabaseAnonKey, {
   auth: {
     autoRefreshToken: true,
     persistSession: true,
@@ -22,14 +22,16 @@ export const createClientSupabaseClient = () =>
   createBrowserClient<Database>(supabaseUrl, supabaseAnonKey);
 
 // Server component client (for use in server components)
-export const createServerSupabaseClient = () => 
-  createServerClient<Database>(supabaseUrl, supabaseAnonKey, {
+export const createServerSupabaseClient = async () => {
+  const cookieStore = await cookies();
+  return createServerClient<Database>(supabaseUrl, supabaseAnonKey, {
     cookies: {
       get(name: string) {
-        return cookies().get(name)?.value;
+        return cookieStore.get(name)?.value;
       },
     },
   });
+};
 
 // Middleware client (for use in Next.js middleware)
 export const createMiddlewareSupabaseClient = (request?: NextRequest, response?: NextResponse) => {
@@ -60,7 +62,7 @@ export const createMiddlewareSupabaseClient = (request?: NextRequest, response?:
 };
 
 // Admin client with service role key (for server-side operations)
-export const supabaseAdmin = createClient<Database>(
+export const supabaseAdmin = createSupabaseClient<Database>(
   supabaseUrl,
   supabaseServiceKey,
   {
@@ -70,6 +72,9 @@ export const supabaseAdmin = createClient<Database>(
     },
   }
 );
+
+// API route client (for use in API routes - uses admin client for full access)
+export const createClient = (): typeof supabaseAdmin => supabaseAdmin;
 
 // Type-safe helpers for common database operations
 export type SupabaseClient = typeof supabase;
