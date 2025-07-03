@@ -1,49 +1,39 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getMetaAuthUrl } from '@/lib/auth';
+import { NextRequest } from 'next/server';
+import { buildAuthUrl, validateMetaConfig } from '@/lib/auth-config';
 
 export async function GET(request: NextRequest) {
   try {
-    // Generate a state parameter for security
-    const state = crypto.randomUUID();
+    // Validate Meta configuration
+    validateMetaConfig();
     
-    // Store state in a secure cookie (you might want to use a more robust solution in production)
-    const response = NextResponse.redirect(getMetaAuthUrl(state));
+    // Generate a random state parameter for security
+    const state = globalThis.crypto.randomUUID();
     
-    response.cookies.set('oauth_state', state, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 600, // 10 minutes
+    // Get return URL from query params (optional)
+    const returnUrl = request.nextUrl.searchParams.get('returnUrl');
+    if (returnUrl) {
+      // In a production app, you might want to store this state->returnUrl mapping
+      // in a database or secure session store
+    }
+    
+    // Build OAuth authorization URL
+    const authUrl = buildAuthUrl(state);
+    
+    // Redirect to Meta OAuth
+    return new Response(null, {
+      status: 302,
+      headers: {
+        'Location': authUrl
+      }
     });
-
-    return response;
+    
   } catch (error) {
-    console.error('Sign-in error:', error);
-    return NextResponse.json(
-      { error: 'Failed to initiate sign-in' },
+    console.error('Auth signin error:', error);
+    return new Response(
+      `Configuration error: ${error instanceof Error ? error.message : 'Unknown error'}`,
       { status: 500 }
     );
   }
 }
 
-export async function POST(request: NextRequest) {
-  // For programmatic sign-in (if needed)
-  try {
-    const body = await request.json();
-    const { redirectTo = '/dashboard' } = body;
-
-    const state = crypto.randomUUID();
-    const authUrl = getMetaAuthUrl(state);
-
-    return NextResponse.json({
-      authUrl,
-      state,
-    });
-  } catch (error) {
-    console.error('Sign-in error:', error);
-    return NextResponse.json(
-      { error: 'Failed to initiate sign-in' },
-      { status: 500 }
-    );
-  }
-} 
+ 

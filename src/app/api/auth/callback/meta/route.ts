@@ -1,170 +1,104 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { createServerClient } from '@supabase/ssr';
-import { cookies } from 'next/headers';
-import { 
-  exchangeCodeForToken, 
-  getLongLivedToken, 
-  getMetaUserInfo 
-} from '@/lib/auth';
-import { supabaseAdmin } from '@/lib/supabase';
-import type { Database } from '@/types/database';
+import { NextRequest } from 'next/server';
+import { exchangeCodeForToken, validateMetaConfig } from '@/lib/auth-config';
+import { createThreadsClient } from '@/lib/threads-api';
+import { createClient } from '@/lib/supabase';
 
 export async function GET(request: NextRequest) {
-  const requestUrl = new URL(request.url);
-  const code = requestUrl.searchParams.get('code');
-  const state = requestUrl.searchParams.get('state');
-  const error = requestUrl.searchParams.get('error');
+  const searchParams = request.nextUrl.searchParams;
+  const code = searchParams.get('code');
+  const error = searchParams.get('error');
+  const state = searchParams.get('state');
+
+  // Validate configuration
+  try {
+    validateMetaConfig();
+  } catch (error) {
+    console.error('Meta configuration error:', error);
+    return new Response('Configuration error', { status: 500 });
+  }
 
   // Handle OAuth errors
-  if (error || !code) {
-    return NextResponse.redirect(
-      new URL('/auth/error?error=oauth_error', requestUrl.origin)
+  if (error) {
+    console.error('OAuth error:', error);
+    const errorDescription = searchParams.get('error_description');
+    return new Response(
+      `OAuth error: ${error}${errorDescription ? ` - ${errorDescription}` : ''}`,
+      { status: 400 }
     );
   }
 
+  // Check for authorization code
+  if (!code) {
+    return new Response('Missing authorization code', { status: 400 });
+  }
+
   try {
-    // Exchange authorization code for access token
-    const tokenData = await exchangeCodeForToken(code);
+    // Exchange code for access token
+    const tokenResponse = await exchangeCodeForToken(code);
     
-    if (!tokenData.access_token) {
+    if (!tokenResponse.access_token) {
       throw new Error('No access token received');
     }
 
-    // Get long-lived token (60 days)
-    const longLivedTokenData = await getLongLivedToken(tokenData.access_token);
-    const accessToken = longLivedTokenData.access_token || tokenData.access_token;
-    const expiresIn = longLivedTokenData.expires_in || tokenData.expires_in || 5184000; // 60 days default
+    // Test the token by getting user info
+    const threadsClient = createThreadsClient(tokenResponse.access_token, true);
+    const userInfo = await threadsClient.getMe(['id', 'username', 'name']);
 
-    // Get user info from Meta
-    const metaUser = await getMetaUserInfo(accessToken);
-
-    if (!metaUser.id || !metaUser.email) {
-      throw new Error('Incomplete user data from Meta');
-    }
-
-    // Check if user exists in our database
-    let { data: existingUser, error: selectError } = await supabaseAdmin
+    // Store user and token info in database
+    const supabase = createClient();
+    
+    // First, check if user already exists
+    const { data: existingUser } = await supabase
       .from('users')
-      .select('*')
-      .eq('meta_id', metaUser.id)
+      .select('id')
+      .eq('threads_user_id', userInfo.id)
       .single();
 
-    let userId: string;
-
-    if (selectError && selectError.code === 'PGRST116') {
-      // User doesn't exist, create new user
-      const { data: newUser, error: insertError } = await supabaseAdmin
-        .from('users')
-        .insert({
-          meta_id: metaUser.id,
-          email: metaUser.email,
-          name: metaUser.name || 'User',
-          access_token: accessToken,
-          token_expires_at: new Date(Date.now() + expiresIn * 1000).toISOString(),
-          is_active: true,
-          subscription_tier: 'free',
-        })
-        .select()
-        .single();
-
-      if (insertError) {
-        console.error('Error creating user:', insertError);
-        throw new Error('Failed to create user');
-      }
-
-      userId = newUser.id;
-
-      // Create default user settings
-      await supabaseAdmin
-        .from('user_settings')
-        .insert({
-          user_id: userId,
-          timezone: 'UTC',
-          auto_save_enabled: true,
-          auto_save_interval: 30,
-          default_privacy: 'public',
-          notification_preferences: {},
-          posting_schedule: {},
-        });
-
-    } else if (!selectError) {
-      // User exists, update their access token
-      const { error: updateError } = await supabaseAdmin
+    if (existingUser) {
+      // Update existing user's token
+      await supabase
         .from('users')
         .update({
-          access_token: accessToken,
-          token_expires_at: new Date(Date.now() + expiresIn * 1000).toISOString(),
-          email: metaUser.email,
-          name: metaUser.name || existingUser.name,
-          updated_at: new Date().toISOString(),
+          threads_access_token: tokenResponse.access_token,
+          threads_token_expires_at: tokenResponse.expires_in 
+            ? new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
+            : null,
+          updated_at: new Date().toISOString()
         })
-        .eq('meta_id', metaUser.id);
-
-      if (updateError) {
-        console.error('Error updating user:', updateError);
-        throw new Error('Failed to update user');
-      }
-
-      userId = existingUser.id;
+        .eq('threads_user_id', userInfo.id);
     } else {
-      console.error('Database error:', selectError);
-      throw new Error('Database error');
+      // Create new user record
+      await supabase
+        .from('users')
+        .insert({
+          threads_user_id: userInfo.id,
+          username: userInfo.username,
+          display_name: userInfo.name,
+          threads_access_token: tokenResponse.access_token,
+          threads_token_expires_at: tokenResponse.expires_in 
+            ? new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
+            : null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        });
     }
 
-    // Create a Supabase session
-    const supabase = createServerClient<Database>(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          get(name: string) {
-            return cookies().get(name)?.value;
-          },
-          set(name: string, value: string, options: any) {
-            cookies().set({ name, value, ...options });
-          },
-          remove(name: string, options: any) {
-            cookies().set({ name, value: '', ...options });
-          },
-        },
+    // Set cookie and redirect to dashboard
+    const response = new Response(null, {
+      status: 302,
+      headers: {
+        'Location': '/dashboard',
+        'Set-Cookie': `threads_user_id=${userInfo.id}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 24 * 30}` // 30 days
       }
-    );
-    
-    // Sign in the user with Supabase Auth using a custom provider
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email: metaUser.email,
-      password: metaUser.id, // Use Meta ID as password for this custom flow
     });
 
-    // If user doesn't exist in Supabase Auth, create them
-    if (signInError) {
-      const { error: signUpError } = await supabase.auth.signUp({
-        email: metaUser.email,
-        password: metaUser.id,
-        options: {
-          data: {
-            name: metaUser.name,
-            meta_id: metaUser.id,
-            user_id: userId,
-          },
-        },
-      });
-
-      if (signUpError) {
-        console.error('Error creating auth user:', signUpError);
-        // Continue anyway - we have the user in our database
-      }
-    }
-
-    // Redirect to dashboard on success
-    return NextResponse.redirect(
-      new URL('/dashboard', requestUrl.origin)
-    );
+    return response;
 
   } catch (error) {
-    console.error('Auth callback error:', error);
-    return NextResponse.redirect(
-      new URL('/auth/error?error=callback_error', requestUrl.origin)
+    console.error('Token exchange or user creation error:', error);
+    return new Response(
+      `Authentication failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      { status: 500 }
     );
   }
 }
