@@ -28,10 +28,18 @@ export class ThreadsAPIError extends Error {
 export class ThreadsAPIClient {
   private baseUrl: string;
   private accessToken: string;
+  private debug: boolean;
 
-  constructor(accessToken: string) {
+  constructor(accessToken: string, debug = false) {
     this.baseUrl = `${THREADS_API_BASE}/${THREADS_API_VERSION}`;
     this.accessToken = accessToken;
+    this.debug = debug;
+  }
+
+  private log(message: string, data?: any) {
+    if (this.debug) {
+      console.log(`[ThreadsAPI] ${message}`, data || '');
+    }
   }
 
   private async makeRequest<T>(
@@ -39,32 +47,77 @@ export class ThreadsAPIClient {
     options: RequestInit = {}
   ): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
+    
+    // For GET requests, add access_token as query parameter
+    // For POST requests, add it to the body or as query parameter
+    const finalUrl = options.method === 'POST' 
+      ? url 
+      : `${url}${url.includes('?') ? '&' : '?'}access_token=${this.accessToken}`;
+
     const headers = {
-      'Authorization': `Bearer ${this.accessToken}`,
       'Content-Type': 'application/json',
       ...options.headers,
     };
 
+    // Add access token to POST request body if not already present
+    let body = options.body;
+    if (options.method === 'POST' && body) {
+      const formData = new URLSearchParams(body as string);
+      if (!formData.has('access_token')) {
+        formData.set('access_token', this.accessToken);
+        body = formData.toString();
+        headers['Content-Type'] = 'application/x-www-form-urlencoded';
+      }
+    }
+
+    // Log request details for debugging
+    this.log('Making request', {
+      url: finalUrl,
+      method: options.method || 'GET',
+      headers,
+      bodyPreview: body ? (body as string).substring(0, 200) + '...' : 'none'
+    });
+
     try {
-      const response = await fetch(url, {
+      const response = await fetch(finalUrl, {
         ...options,
         headers,
+        body,
       });
 
       const data = await response.json();
 
+      // Log response details
+      this.log('Response received', {
+        status: response.status,
+        statusText: response.statusText,
+        headers: Object.fromEntries(response.headers.entries()),
+        data: data
+      });
+
       if (!response.ok) {
         const error = data as ThreadsError;
+        
+        // Enhanced error logging
+        this.log('API Error Details', {
+          status: response.status,
+          error: error,
+          requestUrl: finalUrl,
+          requestMethod: options.method || 'GET'
+        });
+
         throw new ThreadsAPIError(
-          error.error.message || 'API request failed',
-          error.error.code,
-          error.error.error_subcode,
-          error.error.fbtrace_id
+          error.error?.message || error.error_message || 'API request failed',
+          error.error?.code || error.error_code,
+          error.error?.error_subcode,
+          error.error?.fbtrace_id
         );
       }
 
       return data;
     } catch (error) {
+      this.log('Network or parsing error', error);
+      
       if (error instanceof ThreadsAPIError) {
         throw error;
       }
@@ -78,7 +131,7 @@ export class ThreadsAPIClient {
   async getMe(fields?: string[]): Promise<ThreadsUser> {
     const fieldsParam = fields?.length 
       ? `?fields=${fields.join(',')}` 
-      : '?fields=id,username,account_type,name,biography,profile_picture_url,followers_count,following_count,threads_count,is_verified';
+      : '?fields=id,username,account_type,name,threads_biography,threads_profile_picture_url,followers_count,following_count,threads_count,is_verified';
     
     return this.makeRequest<ThreadsUser>(`${THREADS_ENDPOINTS.ME}${fieldsParam}`);
   }
@@ -117,19 +170,21 @@ export class ThreadsAPIClient {
   }): Promise<ThreadsMediaResponse> {
     const user = await this.getMe(['id']);
     
-    const payload: CreateThreadsMediaRequest = {
+    const payload = new URLSearchParams({
       media_type: 'TEXT',
       text: request.text,
-      link_attachment: request.link_attachment,
-      reply_to_id: request.reply_to_id,
-      reply_control: request.reply_control,
-    };
+      access_token: this.accessToken,
+    });
+    
+    if (request.link_attachment) payload.set('link_attachment', request.link_attachment);
+    if (request.reply_to_id) payload.set('reply_to_id', request.reply_to_id);
+    if (request.reply_control) payload.set('reply_control', request.reply_control);
 
     return this.makeRequest<ThreadsMediaResponse>(
       THREADS_ENDPOINTS.CREATE_MEDIA(user.id),
       {
         method: 'POST',
-        body: JSON.stringify(payload),
+        body: payload.toString(),
       }
     );
   }
@@ -144,21 +199,23 @@ export class ThreadsAPIClient {
   }): Promise<ThreadsMediaResponse> {
     const user = await this.getMe(['id']);
     
-    const payload: CreateThreadsMediaRequest = {
+    const payload = new URLSearchParams({
       media_type: 'IMAGE',
       image_url: request.image_url,
-      text: request.text,
-      alt_text: request.alt_text,
-      is_carousel_item: request.is_carousel_item,
-      reply_to_id: request.reply_to_id,
-      reply_control: request.reply_control,
-    };
+      access_token: this.accessToken,
+    });
+    
+    if (request.text) payload.set('text', request.text);
+    if (request.alt_text) payload.set('alt_text', request.alt_text);
+    if (request.is_carousel_item) payload.set('is_carousel_item', 'true');
+    if (request.reply_to_id) payload.set('reply_to_id', request.reply_to_id);
+    if (request.reply_control) payload.set('reply_control', request.reply_control);
 
     return this.makeRequest<ThreadsMediaResponse>(
       THREADS_ENDPOINTS.CREATE_MEDIA(user.id),
       {
         method: 'POST',
-        body: JSON.stringify(payload),
+        body: payload.toString(),
       }
     );
   }
@@ -171,19 +228,21 @@ export class ThreadsAPIClient {
   }): Promise<ThreadsMediaResponse> {
     const user = await this.getMe(['id']);
     
-    const payload: CreateThreadsMediaRequest = {
+    const payload = new URLSearchParams({
       media_type: 'VIDEO',
       video_url: request.video_url,
-      text: request.text,
-      reply_to_id: request.reply_to_id,
-      reply_control: request.reply_control,
-    };
+      access_token: this.accessToken,
+    });
+    
+    if (request.text) payload.set('text', request.text);
+    if (request.reply_to_id) payload.set('reply_to_id', request.reply_to_id);
+    if (request.reply_control) payload.set('reply_control', request.reply_control);
 
     return this.makeRequest<ThreadsMediaResponse>(
       THREADS_ENDPOINTS.CREATE_MEDIA(user.id),
       {
         method: 'POST',
-        body: JSON.stringify(payload),
+        body: payload.toString(),
       }
     );
   }
@@ -197,20 +256,22 @@ export class ThreadsAPIClient {
   }): Promise<ThreadsMediaResponse> {
     const user = await this.getMe(['id']);
     
-    const payload: CreateCarouselRequest = {
+    const payload = new URLSearchParams({
       media_type: 'CAROUSEL',
-      children: request.children,
-      text: request.text,
-      link_attachment: request.link_attachment,
-      reply_to_id: request.reply_to_id,
-      reply_control: request.reply_control,
-    };
+      children: request.children.join(','),
+      access_token: this.accessToken,
+    });
+    
+    if (request.text) payload.set('text', request.text);
+    if (request.link_attachment) payload.set('link_attachment', request.link_attachment);
+    if (request.reply_to_id) payload.set('reply_to_id', request.reply_to_id);
+    if (request.reply_control) payload.set('reply_control', request.reply_control);
 
     return this.makeRequest<ThreadsMediaResponse>(
       THREADS_ENDPOINTS.CREATE_MEDIA(user.id),
       {
         method: 'POST',
-        body: JSON.stringify(payload),
+        body: payload.toString(),
       }
     );
   }
@@ -218,15 +279,16 @@ export class ThreadsAPIClient {
   async publishMedia(creationId: string): Promise<ThreadsMediaResponse> {
     const user = await this.getMe(['id']);
     
-    const payload: PublishMediaRequest = {
+    const payload = new URLSearchParams({
       creation_id: creationId,
-    };
+      access_token: this.accessToken,
+    });
 
     return this.makeRequest<ThreadsMediaResponse>(
       THREADS_ENDPOINTS.PUBLISH_MEDIA(user.id),
       {
         method: 'POST',
-        body: JSON.stringify(payload),
+        body: payload.toString(),
       }
     );
   }
@@ -243,7 +305,7 @@ export class ThreadsAPIClient {
     return this.makeRequest<ThreadsMedia>(`${THREADS_ENDPOINTS.GET_MEDIA(mediaId)}${fieldsParam}`);
   }
 
-  // Insights and analytics
+  // Insights and analytics - Updated to follow Meta guide
   async getUserInsights(
     userId: string,
     metrics: string[],
@@ -261,6 +323,18 @@ export class ThreadsAPIClient {
     if (options?.until) params.set('until', options.until);
 
     const endpoint = `${THREADS_ENDPOINTS.USER_INSIGHTS(userId)}?${params.toString()}`;
+    return this.makeRequest<ThreadsPagedResponse<ThreadsInsights>>(endpoint);
+  }
+
+  // Media insights - Added per Meta guide
+  async getMediaInsights(
+    mediaId: string,
+    metrics: string[]
+  ): Promise<ThreadsPagedResponse<ThreadsInsights>> {
+    const params = new URLSearchParams();
+    params.set('metric', metrics.join(','));
+
+    const endpoint = `${THREADS_ENDPOINTS.MEDIA_INSIGHTS(mediaId)}?${params.toString()}`;
     return this.makeRequest<ThreadsPagedResponse<ThreadsInsights>>(endpoint);
   }
 
@@ -306,21 +380,31 @@ export class ThreadsAPIClient {
   }
 
   async hideReply(replyId: string): Promise<{ success: boolean }> {
+    const payload = new URLSearchParams({
+      hide: 'true',
+      access_token: this.accessToken,
+    });
+
     return this.makeRequest<{ success: boolean }>(
       `${THREADS_ENDPOINTS.MANAGE_REPLY(replyId)}`,
       {
         method: 'POST',
-        body: JSON.stringify({ hide: true }),
+        body: payload.toString(),
       }
     );
   }
 
   async unhideReply(replyId: string): Promise<{ success: boolean }> {
+    const payload = new URLSearchParams({
+      hide: 'false',
+      access_token: this.accessToken,
+    });
+
     return this.makeRequest<{ success: boolean }>(
       `${THREADS_ENDPOINTS.MANAGE_REPLY(replyId)}`,
       {
         method: 'POST',
-        body: JSON.stringify({ hide: false }),
+        body: payload.toString(),
       }
     );
   }
@@ -351,15 +435,80 @@ export class ThreadsAPIClient {
   }
 
   async refreshAccessToken(): Promise<string> {
-    // Implement token refresh logic
-    // This would typically involve calling the refresh token endpoint
-    throw new Error('Token refresh not implemented');
+    // Implement token refresh logic using the refresh endpoint
+    const response = await fetch(`${this.baseUrl}/refresh_access_token?grant_type=th_refresh_token&access_token=${this.accessToken}`);
+    
+    if (!response.ok) {
+      throw new ThreadsAPIError('Token refresh failed');
+    }
+    
+    const data = await response.json();
+    this.accessToken = data.access_token;
+    return data.access_token;
+  }
+
+  // Add a method to test basic connectivity
+  async testConnection(): Promise<{ success: boolean; details?: any }> {
+    try {
+      this.log('Testing basic connectivity...');
+      const result = await this.getMe(['id', 'username']);
+      return { success: true, details: result };
+    } catch (error) {
+      this.log('Connection test failed', error);
+      return { 
+        success: false, 
+        details: error instanceof ThreadsAPIError ? {
+          message: error.message,
+          code: error.code,
+          subcode: error.subcode,
+          traceId: error.traceId
+        } : error 
+      };
+    }
+  }
+
+  // Add token validation with detailed feedback
+  async validateTokenDetailed(): Promise<{
+    valid: boolean;
+    scopes?: string[];
+    expiresAt?: number;
+    error?: string;
+  }> {
+    try {
+      // First try to get basic user info
+      const user = await this.getMe(['id']);
+      
+      // If that works, try to get more detailed token info
+      // Note: debug_token endpoint might not be available for all tokens
+      try {
+        const debugUrl = `${this.baseUrl}/debug_token?input_token=${this.accessToken}&access_token=${this.accessToken}`;
+        const debugResponse = await fetch(debugUrl);
+        
+        if (debugResponse.ok) {
+          const debugData = await debugResponse.json();
+          return {
+            valid: true,
+            scopes: debugData.data?.scopes,
+            expiresAt: debugData.data?.expires_at,
+          };
+        }
+      } catch (debugError) {
+        this.log('Token debug failed (expected for some token types)', debugError);
+      }
+      
+      return { valid: true };
+    } catch (error) {
+      return {
+        valid: false,
+        error: error instanceof ThreadsAPIError ? error.message : 'Unknown validation error'
+      };
+    }
   }
 }
 
 // Helper functions
-export const createThreadsClient = (accessToken: string) => {
-  return new ThreadsAPIClient(accessToken);
+export const createThreadsClient = (accessToken: string, debug = false) => {
+  return new ThreadsAPIClient(accessToken, debug);
 };
 
 export const validateMediaContent = (content: string): { valid: boolean; errors: string[] } => {

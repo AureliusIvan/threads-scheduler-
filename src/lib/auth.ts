@@ -15,7 +15,7 @@ export const AUTH_CONFIG = {
   ].join(','),
 };
 
-// Meta OAuth URLs
+// Meta OAuth URLs - Updated to use correct Threads endpoints
 export const getMetaAuthUrl = (state?: string) => {
   const params = new URLSearchParams({
     client_id: AUTH_CONFIG.metaClientId,
@@ -25,12 +25,13 @@ export const getMetaAuthUrl = (state?: string) => {
     state: state || crypto.randomUUID(),
   });
 
-  return `https://www.facebook.com/v18.0/dialog/oauth?${params.toString()}`;
+  // Use the correct Threads authorization endpoint
+  return `https://threads.net/oauth/authorize?${params.toString()}`;
 };
 
-// Exchange code for access token
+// Exchange code for access token - Updated to use Threads endpoint
 export const exchangeCodeForToken = async (code: string) => {
-  const response = await fetch('https://graph.facebook.com/v18.0/oauth/access_token', {
+  const response = await fetch('https://graph.threads.net/oauth/access_token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -38,46 +39,74 @@ export const exchangeCodeForToken = async (code: string) => {
       client_secret: AUTH_CONFIG.metaClientSecret,
       redirect_uri: AUTH_CONFIG.redirectUri,
       code,
+      grant_type: 'authorization_code', // Added required grant_type
     }),
   });
 
   if (!response.ok) {
-    throw new Error('Failed to exchange code for token');
+    const errorData = await response.json();
+    throw new Error(`Failed to exchange code for token: ${errorData.error_message || response.statusText}`);
   }
 
   return response.json();
 };
 
-// Get long-lived token
+// Get long-lived token - Updated to use correct Threads endpoint
 export const getLongLivedToken = async (shortLivedToken: string) => {
-  const response = await fetch('https://graph.facebook.com/v18.0/oauth/access_token', {
-    method: 'GET',
-    headers: { 'Content-Type': 'application/json' },
-  });
-
-  const url = new URL('https://graph.facebook.com/v18.0/oauth/access_token');
-  url.searchParams.set('grant_type', 'fb_exchange_token');
-  url.searchParams.set('client_id', AUTH_CONFIG.metaClientId);
+  const url = new URL('https://graph.threads.net/v1.0/access_token');
+  url.searchParams.set('grant_type', 'th_exchange_token');
   url.searchParams.set('client_secret', AUTH_CONFIG.metaClientSecret);
-  url.searchParams.set('fb_exchange_token', shortLivedToken);
+  url.searchParams.set('access_token', shortLivedToken);
 
-  const longLivedResponse = await fetch(url.toString());
+  const response = await fetch(url.toString());
   
-  if (!longLivedResponse.ok) {
-    throw new Error('Failed to get long-lived token');
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(`Failed to get long-lived token: ${errorData.error?.message || response.statusText}`);
   }
 
-  return longLivedResponse.json();
+  return response.json();
 };
 
-// Get user info from Meta
-export const getMetaUserInfo = async (accessToken: string) => {
+// Refresh long-lived token
+export const refreshLongLivedToken = async (accessToken: string) => {
+  const url = new URL('https://graph.threads.net/v1.0/refresh_access_token');
+  url.searchParams.set('grant_type', 'th_refresh_token');
+  url.searchParams.set('access_token', accessToken);
+
+  const response = await fetch(url.toString());
+  
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(`Failed to refresh token: ${errorData.error?.message || response.statusText}`);
+  }
+
+  return response.json();
+};
+
+// Get user info from Threads - Updated to use Threads Graph API
+export const getThreadsUserInfo = async (accessToken: string) => {
   const response = await fetch(
-    `https://graph.facebook.com/me?access_token=${accessToken}&fields=id,name,email`
+    `https://graph.threads.net/v1.0/me?access_token=${accessToken}&fields=id,username,name,threads_profile_picture_url,threads_biography`
   );
 
   if (!response.ok) {
-    throw new Error('Failed to fetch user info');
+    const errorData = await response.json();
+    throw new Error(`Failed to fetch user info: ${errorData.error?.message || response.statusText}`);
+  }
+
+  return response.json();
+};
+
+// Debug token
+export const debugToken = async (accessToken: string) => {
+  const response = await fetch(
+    `https://graph.threads.net/v1.0/debug_token?input_token=${accessToken}&access_token=${accessToken}`
+  );
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(`Failed to debug token: ${errorData.error?.message || response.statusText}`);
   }
 
   return response.json();
@@ -123,13 +152,15 @@ export const getServerSession = async () => {
   const { createServerClient } = await import('@supabase/ssr');
   const { cookies } = await import('next/headers');
   
+  const cookieStore = await cookies();
+  
   const supabase = createServerClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
         get(name: string) {
-          return cookies().get(name)?.value;
+          return cookieStore.get(name)?.value;
         },
       },
     }
@@ -143,13 +174,15 @@ export const getServerUser = async () => {
   const { createServerClient } = await import('@supabase/ssr');
   const { cookies } = await import('next/headers');
   
+  const cookieStore = await cookies();
+  
   const supabase = createServerClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
         get(name: string) {
-          return cookies().get(name)?.value;
+          return cookieStore.get(name)?.value;
         },
       },
     }

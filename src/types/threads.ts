@@ -93,13 +93,17 @@ export interface ThreadsMediaResponse {
 }
 
 export interface ThreadsError {
-  error: {
+  error?: {
     message: string;
     type: string;
     code: number;
     error_subcode?: number;
     fbtrace_id: string;
   };
+  // Alternative error format used by some endpoints
+  error_message?: string;
+  error_code?: number;
+  error_type?: string;
 }
 
 // Auth Types
@@ -226,6 +230,7 @@ export const THREADS_ENDPOINTS = {
   CREATE_MEDIA: (userId: string) => `/${userId}/threads`,
   PUBLISH_MEDIA: (userId: string) => `/${userId}/threads_publish`,
   GET_MEDIA: (mediaId: string) => `/${mediaId}`,
+  MEDIA_INSIGHTS: (mediaId: string) => `/${mediaId}/insights`,
   
   // Auth endpoints
   ACCESS_TOKEN: '/oauth/access_token',
